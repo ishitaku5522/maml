@@ -123,14 +123,14 @@ def main():
     num_preupdates = 10
     one_set_size = 10
     num_tasks = 200
+    task_batch_size = 200
     x_sample_size = 30
     x_range = 10
     y_range = 10
 
     modelname = "sindataset"
-    restore_epoch = 2300
-    train_epoch = 0000
-    task_batch_size = 1
+    restore_epoch =200
+    train_epoch = 000
 
     x_pre, x_meta, y_pre, y_meta = generate_dataset(
         num_tasks, one_set_size, x_sample_size, x_range, y_range)
@@ -146,8 +146,8 @@ def main():
     # [task, batch_for_a_task, input]
     x_pre_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
     y_pre_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
-    x_meta_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
-    y_meta_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
+    x_meta_ph = tf.placeholder(tf.float32, shape=[task_batch_size, None, 1])
+    y_meta_ph = tf.placeholder(tf.float32, shape=[task_batch_size, None, 1])
 
     dataset = tf.data.Dataset.from_tensor_slices((x_pre_ph, y_pre_ph, x_meta_ph, y_meta_ph))
     dataset = dataset.shuffle(buffer_size=10000)
@@ -212,14 +212,15 @@ def main():
                 fewshot_weights[key] = fewshot_weights[key] - \
                     fewshot_lr * fewshot_grads[key]
 
-    pre_meta_predictions = \
-        model.forward_func(X_meta[0], weights, name="pre_meta")
-    pre_meta_loss_op = \
-        model.loss_func(pre_meta_predictions, Y_meta[0])
-    meta_predictions = \
-        model.forward_func(X_meta[0], fewshot_weights, name="meta")
-    meta_loss_op = \
-        model.loss_func(meta_predictions, Y_meta[0])
+    for i in range(task_batch_size):
+        pre_meta_predictions = \
+            model.forward_func(X_meta[i], weights, name="pre_meta")
+        pre_meta_loss_op = \
+            model.loss_func(pre_meta_predictions, Y_meta[i])
+        meta_predictions = \
+            model.forward_func(X_meta[i], fewshot_weights, name="meta")
+        meta_loss_op = \
+            model.loss_func(meta_predictions, Y_meta[i])
 
     #  optimizer = tf.train.GradientDescentOptimizer(0.001)
     optimizer = tf.train.AdamOptimizer()
@@ -275,6 +276,10 @@ def main():
 
         x_pre, x_meta, y_pre, y_meta, amp, phase = generate_test_dataset(
             one_set_size, x_sample_size, x_range, y_range)
+        x_pre = np.repeat(x_pre, task_batch_size, axis=0)
+        y_pre = np.repeat(y_pre, task_batch_size, axis=0)
+        x_meta = np.repeat(x_meta, task_batch_size, axis=0)
+        y_meta = np.repeat(y_meta, task_batch_size, axis=0)
         #  x_reference = np.arange(-x_range, x_range, 0.01),
         #  y_reference = func(x_reference[0], phase, amp)
 
@@ -290,7 +295,7 @@ def main():
             [pre_meta_predictions, meta_predictions],
             feed_dict=feed_dict)
 
-    plt.figure(i)
+    plt.figure(1)
     plt.plot(x_meta[0], pred_pre, label="pred_pre" + str(i))
     plt.plot(x_meta[0], pred, label="pred" + str(i))
     plt.plot(x_meta[0], y_meta[0], label="y" + str(i))
