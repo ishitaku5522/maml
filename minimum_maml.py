@@ -107,15 +107,15 @@ def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range,
 
 def main():
 
-    num_tasks = 25
-    task_batch_size = 25
-    num_preupdates = 10
+    num_tasks = 10
+    task_batch_size = 10
+    num_preupdates = 5
 
     # data for preupdate size will be:
     # 1 / one_set_size * num_sample_for_preupdate
     # and for metaupdate size will be:
     # ((one_set_size - 1) / one_set_size) * num_sample_for_preupdate
-    one_set_size = 2
+    one_set_size = 5
     num_sample_for_preupdate = 50
     x_range = 5
     y_range = 5
@@ -288,6 +288,7 @@ def main():
         #  run_metadata = tf.RunMetadata()
 
         if restore_epoch > 0:
+            mylogger.info(f"Continue from epoch {restore_epoch}")
             saver.restore(
                 sess, "models/" + modelname + "/step-" + str(restore_epoch))
 
@@ -349,10 +350,7 @@ def main():
             #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
             #      f.write(chrome_trace)
 
-        one_set_size = 2
-        num_sample_for_preupdate = 50
-        x_range = 10
-        y_range = 10
+        num_sample_for_preupdate = 100
 
         num_test_tasks = 1
         x_pre, x_meta, y_pre, y_meta, amps, phases = \
