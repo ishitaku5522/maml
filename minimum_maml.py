@@ -24,77 +24,49 @@ def func(x, phase, amp):
 
 
 class NeuralNet(object):
-    def __init__(self):
+    def __init__(self, hidden_units):
         self.W = {}
         self.b = {}
+        self.hidden_units = hidden_units
 
     def forward_func(self, x, weights, reuse=False, name="model"):
         with tf.name_scope(name):
             layer = x
 
             key = "0"
-            layer = tf.nn.leaky_relu(
+            layer = tf.nn.relu(
                 tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
 
-            key = "1"
-            layer = tf.nn.leaky_relu(
-                tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
+            for i in range(len(self.hidden_units) - 1):
+                key = str(i+1)
+                layer = tf.nn.relu(
+                    tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
 
             key = "out"
             layer = tf.matmul(layer, weights["W_" + key]) + weights["b_" + key]
         return layer
 
     def loss_func(self, pred, actual):
+        pred = tf.reshape(pred, [-1])
+        actual = tf.reshape(actual, [-1])
         ans = tf.reduce_mean(tf.square(pred - actual))
         return ans
 
 
-def generate_test_dataset(one_set_size, x_sample_size, x_range, y_range):
+def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range):
     x_pre = []
     y_pre = []
     x_meta = []
     y_meta = []
-
-    tmp_x = np.random.choice(
-        np.arange(-x_range, x_range, 0.01),
-        one_set_size * x_sample_size,
-        replace=False)
-    tmp_pre_x = np.random.choice(tmp_x, x_sample_size, replace=False)
-    tmp_meta_x = np.setdiff1d(tmp_x, tmp_pre_x)
-    phase = (np.random.sample() * 2 - 1) * np.pi
-    amp = np.random.sample() * y_range
-    tmp_pre_y = func(tmp_pre_x, phase, amp)
-    tmp_meta_y = func(tmp_meta_x, phase, amp)
-    x_pre.append(tmp_pre_x)
-    y_pre.append(tmp_pre_y)
-    x_meta.append(tmp_meta_x)
-    y_meta.append(tmp_meta_y)
-
-    x_pre = np.array(x_pre) * 0.8 / x_range
-    y_pre = np.array(y_pre) * 0.8 / y_range
-    x_meta = np.array(x_meta) * 0.8 / x_range
-    y_meta = np.array(y_meta) * 0.8 / y_range
-
-    x_pre = x_pre[:, :, np.newaxis]
-    y_pre = y_pre[:, :, np.newaxis]
-    x_meta = x_meta[:, :, np.newaxis]
-    y_meta = y_meta[:, :, np.newaxis]
-
-    return x_pre, x_meta, y_pre, y_meta, amp, phase
-
-
-def generate_dataset(num_tasks, one_set_size, x_sample_size, x_range,
-                     y_range):
-    x_pre = []
-    y_pre = []
-    x_meta = []
-    y_meta = []
+    amps = []
+    phases = []
     for i in range(num_tasks):
         tmp_x = np.random.choice(
             np.arange(-x_range, x_range, 0.01),
-            one_set_size * x_sample_size,
+            one_set_size * num_sample_for_preupdate,
             replace=False)
-        tmp_pre_x = np.random.choice(tmp_x, x_sample_size, replace=False)
+        tmp_pre_x = np.random.choice(
+            tmp_x, num_sample_for_preupdate, replace=False)
         tmp_meta_x = np.setdiff1d(tmp_x, tmp_pre_x)
         phase = (np.random.sample() * 2 - 1) * np.pi
         amp = np.random.sample() * y_range
@@ -104,141 +76,194 @@ def generate_dataset(num_tasks, one_set_size, x_sample_size, x_range,
         y_pre.append(tmp_pre_y)
         x_meta.append(tmp_meta_x)
         y_meta.append(tmp_meta_y)
+        amps.append(amp)
+        phases.append(phase)
 
     x_pre = np.array(x_pre) * 0.8 / x_range
     y_pre = np.array(y_pre) * 0.8 / y_range
     x_meta = np.array(x_meta) * 0.8 / x_range
     y_meta = np.array(y_meta) * 0.8 / y_range
+    amps = np.array(amps)
+    phases = np.array(phases)
 
     x_pre = x_pre[:, :, np.newaxis]
     y_pre = y_pre[:, :, np.newaxis]
     x_meta = x_meta[:, :, np.newaxis]
     y_meta = y_meta[:, :, np.newaxis]
 
-    return x_pre, x_meta, y_pre, y_meta
+    return x_pre, x_meta, y_pre, y_meta, amps, phases
 
 
 def main():
 
-    num_preupdates = 10
-    one_set_size = 10
-    num_tasks = 200
-    task_batch_size = 200
-    x_sample_size = 30
-    x_range = 10
-    y_range = 10
+    num_tasks = 100
+    task_batch_size = 25
+    num_preupdates = 5
 
-    modelname = "sindataset"
-    restore_epoch =200
-    train_epoch = 000
+    # data for preupdate size will be:
+    # 1 / one_set_size * num_sample_for_preupdate
+    # and for metaupdate size will be:
+    # ((one_set_size - 1) / one_set_size) * num_sample_for_preupdate
+    one_set_size = 5
+    num_sample_for_preupdate = 10
+    x_range = 5
+    y_range = 5
 
-    x_pre, x_meta, y_pre, y_meta = generate_dataset(
-        num_tasks, one_set_size, x_sample_size, x_range, y_range)
+    modelname = "sin_upd5_he"
+    restore_epoch = 0
+    train_epoch = 20000
+
+    x_pre, x_meta, y_pre, y_meta, amps, phases = generate_dataset(
+        num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range)
 
     x_all = np.concatenate([x_pre, x_meta], axis=1)
     y_all = np.concatenate([y_pre, y_meta], axis=1)
 
-    print(np.max(x_all), np.min(x_all))
-    print(np.max(y_all), np.min(y_all))
-    print(x_pre.shape, y_pre.shape, x_meta.shape, y_meta.shape)
-    print(x_pre.shape, y_pre.shape, x_meta.shape, y_meta.shape)
+    print("x_max:", np.max(x_all), "x_min:", np.min(x_all))
+    print("y_max:", np.max(y_all), "y_min:", np.min(y_all))
+    print("x_pre:", x_pre.shape,
+          "y_pre:", y_pre.shape,
+          "x_meta:", x_meta.shape,
+          "y_meta:", y_meta.shape)
 
     # [task, batch_for_a_task, input]
     x_pre_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
     y_pre_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
-    x_meta_ph = tf.placeholder(tf.float32, shape=[task_batch_size, None, 1])
-    y_meta_ph = tf.placeholder(tf.float32, shape=[task_batch_size, None, 1])
+    x_meta_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
+    y_meta_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
 
-    dataset = tf.data.Dataset.from_tensor_slices((x_pre_ph, y_pre_ph, x_meta_ph, y_meta_ph))
-    dataset = dataset.shuffle(buffer_size=10000)
+    #  X_pre = x_pre_ph
+    #  Y_pre = y_pre_ph
+    #  X_meta = x_meta_ph
+    #  Y_meta = y_meta_ph
+
+    dataset = tf.data.Dataset.from_tensor_slices((x_pre_ph, y_pre_ph,
+                                                  x_meta_ph, y_meta_ph))
     dataset = dataset.repeat()
-    dataset = dataset.prefetch(buffer_size=10)
+    dataset = dataset.shuffle(buffer_size=num_tasks)
+    dataset = dataset.prefetch(buffer_size=task_batch_size)
     dataset = dataset.batch(task_batch_size)
     iterator = dataset.make_initializable_iterator()
     elements = iterator.get_next()
     X_pre, Y_pre, X_meta, Y_meta = elements
 
-    model = NeuralNet()
+    hidden_units = [40, 40]
+
+    model = NeuralNet(hidden_units)
+
+    def get_variable(name: str, shape=[1, 1]):
+        if name.startswith('W_'):
+            variable = tf.Variable(
+                tf.truncated_normal(shape, stddev=tf.sqrt(2 / shape[0])),
+                name=name)
+        elif name.startswith('b_'):
+            variable = tf.Variable(tf.zeros(shape))
+        else:
+            print('No matching initialization method for:', name)
+            variable = tf.Variable(
+                tf.truncated_normal(shape, stddev=0.01))
+        return variable
 
     with tf.variable_scope("weights"):
         weights = {}
 
         key = "0"
-        weights["W_" + key] = tf.get_variable(
-            "W_" + key, shape=[1, 20])
-        weights["b_" + key] = tf.get_variable("b_" + key, shape=[20])
+        weights["W_" +
+                key] = get_variable("W_" + key, shape=[1, hidden_units[0]])
+        weights["b_" +
+                key] = get_variable("b_" + key, shape=[hidden_units[0]])
 
-        key = "1"
-        weights["W_" + key] = tf.get_variable("W_" + key, shape=[20, 20])
-        weights["b_" + key] = tf.get_variable("b_" + key, shape=[20])
+        for i in range(len(hidden_units)-1):
+            key = str(i+1)
+            weights["W_" + key] = get_variable(
+                "W_" + key, shape=[hidden_units[i], hidden_units[i+1]])
+            weights["b_" +
+                    key] = get_variable("b_" + key, shape=[hidden_units[i+1]])
 
         key = "out"
-        weights["W_" + key] = tf.get_variable("W_" + key, shape=[20, 1])
-        weights["b_" + key] = tf.get_variable("b_" + key, shape=[1])
+        weights["W_" +
+                key] = get_variable("W_" + key, shape=[hidden_units[-1], 1])
+        weights["b_" + key] = get_variable("b_" + key, shape=[1])
 
-    fewshot_lr = tf.constant(0.01)
+        for key in weights.keys():
+            tf.summary.histogram("weights/"+key, weights[key])
 
-    # Define few shot graphs
-    fewshot_pred_op = model.forward_func(X_pre[0], weights, name="pre0")
-    fewshot_loss_op = model.loss_func(fewshot_pred_op, Y_pre[0])
+    preupdate_lr = 0.001
 
-    pre_firstshot_loss_op = fewshot_loss_op
+    def metalearn_for_one_task(inp):
+        X_pre_one, Y_pre_one, X_meta_one, Y_meta_one = inp
 
-    with tf.name_scope("pre_grads0"):
-        fewshot_grads = {}
-        for key in weights:
-            fewshot_grads[key] = tf.gradients(fewshot_loss_op, weights[key])
-            fewshot_grads[key] = fewshot_grads[key][0]
+        pre_predictions = [None] * num_preupdates
+        pre_losses = [None] * num_preupdates
+        meta_predictions = [None] * num_preupdates
+        meta_losses = [None] * num_preupdates
 
-    fewshot_weights = {}
-    with tf.name_scope("pre_weights0"):
-        for key in weights:
-            fewshot_weights[key] = weights[key] - \
-                fewshot_lr * fewshot_grads[key]
+        temporary_weights = dict(zip(weights.keys(), list(weights.values())))
 
-    for i in range(1, num_preupdates):
-        fewshot_pred_op = model.forward_func(
-            X_pre[0], fewshot_weights, name="pre" + str(i))
-        fewshot_loss_op = model.loss_func(fewshot_pred_op, Y_pre[0])
+        for i in range(0, num_preupdates):
+            # Prediction with old weights using preupdate data
+            pre_predictions[i] = \
+                model.forward_func(X_pre_one, temporary_weights,
+                                   name="pre" + str(i))
+            pre_losses[i] = \
+                model.loss_func(pre_predictions[i], Y_pre_one)
 
-        with tf.name_scope("pre_grads" + str(i)):
-            for key in weights:
-                fewshot_grads[key] = tf.gradients(fewshot_loss_op,
-                                                  fewshot_weights[key])
-                fewshot_grads[key] = fewshot_grads[key][0]
+            # Calcurate temporary grads/weights
+            temporary_grads = tf.gradients(
+                pre_losses[i], list(temporary_weights.values()))
+            temporary_grads = \
+                dict(zip(temporary_weights.keys(), temporary_grads))
 
-        with tf.name_scope("pre_weights" + str(i)):
-            for key in fewshot_weights:
-                fewshot_weights[key] = fewshot_weights[key] - \
-                    fewshot_lr * fewshot_grads[key]
+            temporary_weights = \
+                dict(zip(temporary_weights.keys(),
+                         [temporary_weights[key] - preupdate_lr * temporary_grads[key]
+                          for key in temporary_weights.keys()]))
 
-    for i in range(task_batch_size):
-        pre_meta_predictions = \
-            model.forward_func(X_meta[i], weights, name="pre_meta")
-        pre_meta_loss_op = \
-            model.loss_func(pre_meta_predictions, Y_meta[i])
-        meta_predictions = \
-            model.forward_func(X_meta[i], fewshot_weights, name="meta")
-        meta_loss_op = \
-            model.loss_func(meta_predictions, Y_meta[i])
+            # Prediction with new weights using the others data
+            meta_predictions[i] = model.forward_func(
+                X_meta_one, temporary_weights, name="meta" + str(i))
+            meta_losses[i] = model.loss_func(meta_predictions[i], Y_meta_one)
+
+        return [pre_predictions, pre_losses, meta_predictions, meta_losses]
+
+    # Do metalearn_for_one_task for each tasks
+    all_pre_predictions, all_pre_losses, \
+        all_meta_predictions, all_meta_losses = \
+        tf.map_fn(
+            metalearn_for_one_task, (X_pre, Y_pre, X_meta, Y_meta),
+            dtype=[[tf.float32] * num_preupdates,
+                   [tf.float32] * num_preupdates,
+                   [tf.float32] * num_preupdates,
+                   [tf.float32] * num_preupdates],
+            parallel_iterations=task_batch_size)
+
+    # Total losses for batch of tasks
+    total_pre_loss = [tf.reduce_mean(all_pre_losses[i])
+                      for i in range(num_preupdates)]
+    total_meta_losses = [tf.reduce_mean(
+        all_meta_losses[i]) for i in range(num_preupdates)]
+
+    for i in range(num_preupdates):
+        tf.summary.scalar('pre_loss'+str(i), total_pre_loss[i])
+        tf.summary.scalar('meta_loss'+str(i), total_meta_losses[i])
 
     #  optimizer = tf.train.GradientDescentOptimizer(0.001)
-    optimizer = tf.train.AdamOptimizer()
-    train_op = optimizer.minimize(meta_loss_op)
-
-    tf.summary.scalar('1pre_loss', pre_firstshot_loss_op)
-    tf.summary.scalar('2premeta_loss', pre_meta_loss_op)
-    tf.summary.scalar('3meta_loss', meta_loss_op)
-    tf.summary.scalar(
-        '4(premeta-meta)/premeta_loss',
-        (pre_meta_loss_op - meta_loss_op) / pre_meta_loss_op)
+    optimizer_normal = tf.train.AdamOptimizer(learning_rate=0.001)
+    optimizer_meta = tf.train.AdamOptimizer(learning_rate=0.001)
+    normal_train_op = optimizer_normal.minimize(total_pre_loss[0])
+    meta_train_op = optimizer_meta.minimize(total_meta_losses[-1])
 
     saver = tf.train.Saver()
 
-    with tf.Session() as sess:
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
 
-        print("Train started!")
+        #  # Profiler
+        #  from tensorflow.python.client import timeline
+        #  options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        #  run_metadata = tf.RunMetadata()
 
         if restore_epoch > 0:
             saver.restore(
@@ -254,34 +279,49 @@ def main():
         }
         sess.run(iterator.initializer, feed_dict=feed_dict)
 
-        #  for epoch in range(0):
-        for epoch in range(restore_epoch + 1, train_epoch):
-            sess.run(train_op, feed_dict=feed_dict)
+        summary_epoch = 100
+        save_epoch = 100
 
-            summ = sess.run(tf.summary.merge_all(), feed_dict=feed_dict)
+        print("Train started!")
 
-            if epoch % 10 == 0:
-                premetaloss = sess.run(
-                    pre_meta_loss_op, feed_dict=feed_dict)
-                metaloss = sess.run(meta_loss_op, feed_dict=feed_dict)
+        for epoch in range(restore_epoch + 1, train_epoch + 1):
+
+            operations = [meta_train_op]
+
+            if epoch % summary_epoch == 0:
+                operations.extend(
+                    [tf.summary.merge_all(),
+                        total_pre_loss[0],
+                        total_meta_losses[-1]])
+
+            #  # Profiler
+            #  results = sess.run(operations, options=options, run_metadata=run_metadata)
+            results = sess.run(operations)
+
+            if epoch % summary_epoch == 0:
+                _, summ, preloss, metaloss = results
                 writer.add_summary(summ, epoch)
-                print(
-                    epoch, "premeta:{:.10f}".format(premetaloss),
-                    "meta:{:.10f}".format(metaloss),
-                    "(premeta-meta)/premeta:{:.10f}".format(
-                        (premetaloss - metaloss) / premetaloss))
+                print(epoch, "pre:{:.10f}".format(
+                    preloss), "meta:{:.10f}".format(metaloss))
 
-            if epoch % 100 == 0:
+            if epoch % save_epoch == 0:
                 saver.save(sess, "models/" + modelname + "/step", epoch)
 
-        x_pre, x_meta, y_pre, y_meta, amp, phase = generate_test_dataset(
-            one_set_size, x_sample_size, x_range, y_range)
-        x_pre = np.repeat(x_pre, task_batch_size, axis=0)
-        y_pre = np.repeat(y_pre, task_batch_size, axis=0)
-        x_meta = np.repeat(x_meta, task_batch_size, axis=0)
-        y_meta = np.repeat(y_meta, task_batch_size, axis=0)
-        #  x_reference = np.arange(-x_range, x_range, 0.01),
-        #  y_reference = func(x_reference[0], phase, amp)
+            #  # Profiler
+            #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            #  chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
+            #      f.write(chrome_trace)
+
+        one_set_size = 2
+        num_sample_for_preupdate = 50
+        x_range = 10
+        y_range = 10
+
+        num_test_tasks = 1
+        x_pre, x_meta, y_pre, y_meta, amps, phases = \
+            generate_dataset(num_test_tasks, one_set_size,
+                             num_sample_for_preupdate, x_range, y_range)
 
         feed_dict = {
             x_pre_ph: x_pre,
@@ -292,13 +332,13 @@ def main():
         sess.run(iterator.initializer, feed_dict=feed_dict)
 
         pred_pre, pred = sess.run(
-            [pre_meta_predictions, meta_predictions],
-            feed_dict=feed_dict)
+            [all_meta_predictions[0], all_meta_predictions[-1]])
 
-    plt.figure(1)
-    plt.plot(x_meta[0], pred_pre, label="pred_pre" + str(i))
-    plt.plot(x_meta[0], pred, label="pred" + str(i))
-    plt.plot(x_meta[0], y_meta[0], label="y" + str(i))
+    for i in range(num_test_tasks):
+        plt.figure(i)
+        plt.plot(x_meta[i], pred_pre[i], label="pred_pre" + str(i))
+        plt.plot(x_meta[i], pred[i], label="pred" + str(i))
+        plt.plot(x_meta[i], y_meta[i], label="y" + str(i))
     #  plt.plot(x_reference[0], y_reference, label="y_reference" + str(i))
     plt.legend()
     plt.show()
