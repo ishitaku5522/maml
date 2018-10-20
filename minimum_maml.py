@@ -15,6 +15,16 @@ import tensorflow as tf
 #  import pandas as pd
 import matplotlib.pyplot as plt
 
+import logging
+mylogger = logging.getLogger(__name__)
+mylogger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+mylogger.addHandler(ch)
+
 _script_dir = os.path.dirname(os.path.realpath(__file__))
 
 
@@ -70,6 +80,7 @@ def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range,
         tmp_meta_x = np.setdiff1d(tmp_x, tmp_pre_x)
         phase = (np.random.sample() * 2 - 1) * np.pi
         amp = np.random.sample() * y_range
+        #  amp = y_range
         tmp_pre_y = func(tmp_pre_x, phase, amp)
         tmp_meta_y = func(tmp_meta_x, phase, amp)
         x_pre.append(tmp_pre_x)
@@ -96,35 +107,45 @@ def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range,
 
 def main():
 
-    num_tasks = 100
+    num_tasks = 25
     task_batch_size = 25
-    num_preupdates = 5
+    num_preupdates = 10
 
     # data for preupdate size will be:
     # 1 / one_set_size * num_sample_for_preupdate
     # and for metaupdate size will be:
     # ((one_set_size - 1) / one_set_size) * num_sample_for_preupdate
-    one_set_size = 5
-    num_sample_for_preupdate = 10
+    one_set_size = 2
+    num_sample_for_preupdate = 50
     x_range = 5
     y_range = 5
 
-    modelname = "sin_upd5_he"
+    modelname = "sin_rnd_ampphase"
+    modelname += "_upd"+str(num_preupdates)
+    modelname += "_presample"+str(num_sample_for_preupdate)
+    modelname += "_setsize"+str(one_set_size)
+    modelname += "_task"+str(num_tasks)
     restore_epoch = 0
     train_epoch = 20000
 
     x_pre, x_meta, y_pre, y_meta, amps, phases = generate_dataset(
         num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range)
 
+    #  for task in range(x_pre.shape[0]):
+    #      for sample in range(x_pre.shape[1]):
+    #          x_pre[task, sample] = np.array(
+    #              [x_pre[task, sample, 0], amps[task], phases[task]])
+    #  import ipdb; ipdb.set_trace()
+
     x_all = np.concatenate([x_pre, x_meta], axis=1)
     y_all = np.concatenate([y_pre, y_meta], axis=1)
 
-    print("x_max:", np.max(x_all), "x_min:", np.min(x_all))
-    print("y_max:", np.max(y_all), "y_min:", np.min(y_all))
-    print("x_pre:", x_pre.shape,
-          "y_pre:", y_pre.shape,
-          "x_meta:", x_meta.shape,
-          "y_meta:", y_meta.shape)
+    mylogger.info(f"x_max:{np.max(x_all)} x_min:{np.min(x_all)}")
+    mylogger.info(f"y_max:{np.max(y_all)} y_min:{np.min(y_all)}")
+    mylogger.info(f"x_pre:{x_pre.shape}")
+    mylogger.info(f"y_pre:{y_pre.shape}")
+    mylogger.info(f"x_meta:{x_meta.shape}")
+    mylogger.info(f"y_meta:{y_meta.shape}")
 
     # [task, batch_for_a_task, input]
     x_pre_ph = tf.placeholder(tf.float32, shape=[None, None, 1])
@@ -147,7 +168,7 @@ def main():
     elements = iterator.get_next()
     X_pre, Y_pre, X_meta, Y_meta = elements
 
-    hidden_units = [40, 40]
+    hidden_units = [40, 40, 40]
 
     model = NeuralNet(hidden_units)
 
@@ -159,7 +180,7 @@ def main():
         elif name.startswith('b_'):
             variable = tf.Variable(tf.zeros(shape))
         else:
-            print('No matching initialization method for:', name)
+            mylogger.info('No matching initialization method for:', name)
             variable = tf.Variable(
                 tf.truncated_normal(shape, stddev=0.01))
         return variable
@@ -255,8 +276,9 @@ def main():
 
     saver = tf.train.Saver()
 
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
+    #  config = tf.ConfigProto()
+    #  config.gpu_options.allow_growth = True
+    config = tf.ConfigProto(device_count={'GPU': 0})
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -282,8 +304,23 @@ def main():
         summary_epoch = 100
         save_epoch = 100
 
-        print("Train started!")
+        #  mylogger.info("Pre Train started!")
+        #  for epoch in range(0000):
 
+        #      operations = [normal_train_op]
+
+        #      if epoch % summary_epoch == 0:
+        #          operations.extend(
+        #              [total_pre_loss[0],
+        #                  total_meta_losses[-1]])
+
+        #      results = sess.run(operations)
+
+        #      if epoch % summary_epoch == 0:
+        #          _, preloss, metaloss = results
+        #          mylogger.info(f"{epoch} pre:{preloss:.10f} meta:{metaloss:.10f}")
+
+        mylogger.info("Meta Train started!")
         for epoch in range(restore_epoch + 1, train_epoch + 1):
 
             operations = [meta_train_op]
@@ -301,8 +338,7 @@ def main():
             if epoch % summary_epoch == 0:
                 _, summ, preloss, metaloss = results
                 writer.add_summary(summ, epoch)
-                print(epoch, "pre:{:.10f}".format(
-                    preloss), "meta:{:.10f}".format(metaloss))
+                mylogger.info(f"{epoch} pre:{preloss:.10f} meta:{metaloss:.10f}")
 
             if epoch % save_epoch == 0:
                 saver.save(sess, "models/" + modelname + "/step", epoch)
