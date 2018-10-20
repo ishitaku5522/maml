@@ -44,12 +44,12 @@ class NeuralNet(object):
             layer = x
 
             key = "0"
-            layer = tf.nn.leaky_relu(
+            layer = tf.nn.relu(
                 tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
 
             for i in range(len(self.hidden_units) - 1):
                 key = str(i+1)
-                layer = tf.nn.leaky_relu(
+                layer = tf.nn.relu(
                     tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
 
             key = "out"
@@ -120,14 +120,13 @@ def main():
     x_range = 5
     y_range = 5
 
-    modelname = "sin_rnd_ampphase"
+    modelname = "sin_rnd_ampphase_nomapfn"
     modelname += "_upd"+str(num_preupdates)
-    modelname += "_presmpl"+str(num_sample_for_preupdate)
+    modelname += "_presample"+str(num_sample_for_preupdate)
     modelname += "_setsize"+str(one_set_size)
     modelname += "_task"+str(num_tasks)
     restore_epoch = 0
-    pretrain_epoch = 0
-    metatrain_epoch = 30000
+    train_epoch = 50000
 
     x_pre, x_meta, y_pre, y_meta, amps, phases = generate_dataset(
         num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range)
@@ -173,6 +172,8 @@ def main():
 
     model = NeuralNet(hidden_units)
 
+    summary_ops = []
+
     def get_variable(name: str, shape=[1, 1]):
         if name.startswith('W_'):
             variable = tf.Variable(
@@ -208,56 +209,78 @@ def main():
         weights["b_" + key] = get_variable("b_" + key, shape=[1])
 
         for key in weights.keys():
-            tf.summary.histogram(key, weights[key])
+            summary_ops.append(tf.summary.histogram("weights/"+key, weights[key]))
 
     preupdate_lr = 0.001
 
     def metalearn_for_one_task(inp):
-        X_pre_one, Y_pre_one, X_meta_one, Y_meta_one = inp
+        with tf.name_scope("one_task"):
+            X_pre_one, Y_pre_one, X_meta_one, Y_meta_one = inp
 
-        pre_predictions = [None] * num_preupdates
-        pre_losses = [None] * num_preupdates
-        meta_predictions = [None] * num_preupdates
-        meta_losses = [None] * num_preupdates
+            pre_predictions = [None] * num_preupdates
+            pre_losses = [None] * num_preupdates
+            meta_predictions = [None] * num_preupdates
+            meta_losses = [None] * num_preupdates
 
-        temporary_weights = dict(zip(weights.keys(), list(weights.values())))
+            temporary_weights = dict(zip(weights.keys(), list(weights.values())))
 
-        for i in range(0, num_preupdates):
-            # Prediction with old weights using preupdate data
-            pre_predictions[i] = \
-                model.forward_func(X_pre_one, temporary_weights,
-                                   name="pre" + str(i))
-            pre_losses[i] = \
-                model.loss_func(pre_predictions[i], Y_pre_one)
+            for i in range(0, num_preupdates):
+                # Prediction with old weights using preupdate data
+                pre_predictions[i] = \
+                    model.forward_func(X_pre_one, temporary_weights,
+                                       name="pre" + str(i))
+                pre_losses[i] = \
+                    model.loss_func(pre_predictions[i], Y_pre_one)
 
-            # Calcurate temporary grads/weights
-            temporary_grads = tf.gradients(
-                pre_losses[i], list(temporary_weights.values()))
-            temporary_grads = \
-                dict(zip(temporary_weights.keys(), temporary_grads))
+                # Calcurate temporary grads/weights
+                temporary_grads = tf.gradients(
+                    pre_losses[i], list(temporary_weights.values()))
+                temporary_grads = \
+                    dict(zip(temporary_weights.keys(), temporary_grads))
 
-            temporary_weights = \
-                dict(zip(temporary_weights.keys(),
-                         [temporary_weights[key] - preupdate_lr * temporary_grads[key]
-                          for key in temporary_weights.keys()]))
+                temporary_weights = \
+                    dict(zip(temporary_weights.keys(),
+                             [temporary_weights[key] - preupdate_lr * temporary_grads[key]
+                              for key in temporary_weights.keys()]))
 
-            # Prediction with new weights using the others data
-            meta_predictions[i] = model.forward_func(
-                X_meta_one, temporary_weights, name="meta" + str(i))
-            meta_losses[i] = model.loss_func(meta_predictions[i], Y_meta_one)
+                # Prediction with new weights using the others data
+                meta_predictions[i] = model.forward_func(
+                    X_meta_one, temporary_weights, name="meta" + str(i))
+                meta_losses[i] = model.loss_func(meta_predictions[i], Y_meta_one)
 
         return [pre_predictions, pre_losses, meta_predictions, meta_losses]
 
-    # Do metalearn_for_one_task for each tasks
-    all_pre_predictions, all_pre_losses, \
-        all_meta_predictions, all_meta_losses = \
-        tf.map_fn(
-            metalearn_for_one_task, (X_pre, Y_pre, X_meta, Y_meta),
-            dtype=[[tf.float32] * num_preupdates,
-                   [tf.float32] * num_preupdates,
-                   [tf.float32] * num_preupdates,
-                   [tf.float32] * num_preupdates],
-            parallel_iterations=task_batch_size)
+    #  # Do metalearn_for_one_task for each tasks
+    #  all_pre_predictions, all_pre_losses, \
+    #      all_meta_predictions, all_meta_losses = \
+    #      tf.map_fn(
+    #          metalearn_for_one_task, (X_pre, Y_pre, X_meta, Y_meta),
+    #          dtype=[[tf.float32] * num_preupdates,
+    #                 [tf.float32] * num_preupdates,
+    #                 [tf.float32] * num_preupdates,
+    #                 [tf.float32] * num_preupdates],
+    #          parallel_iterations=task_batch_size)
+
+    all_pre_predictions = []
+    all_pre_losses = []
+    all_meta_predictions = []
+    all_meta_losses = []
+
+    with tf.name_scope("map_emu"):
+        for i in range(task_batch_size):
+            prepred, preloss, metapred, metaloss = metalearn_for_one_task(
+                (X_pre[i], Y_pre[i], X_meta[i], Y_meta[i]))
+            all_pre_predictions.append(tf.stack(prepred))
+            all_pre_losses.append(tf.stack(preloss))
+            all_meta_predictions.append(tf.stack(metapred))
+            all_meta_losses.append(tf.stack(metaloss))
+
+        all_pre_predictions = tf.transpose(
+            tf.stack(all_pre_predictions), [1, 0, 2, 3])
+        all_pre_losses = tf.transpose(tf.stack(all_pre_losses), [1, 0])
+        all_meta_predictions = tf.transpose(
+            tf.stack(all_meta_predictions), [1, 0, 2, 3])
+        all_meta_losses = tf.transpose(tf.stack(all_meta_losses), [1, 0])
 
     # Total losses for batch of tasks
     total_pre_loss = [tf.reduce_mean(all_pre_losses[i])
@@ -266,8 +289,8 @@ def main():
         all_meta_losses[i]) for i in range(num_preupdates)]
 
     for i in range(num_preupdates):
-        tf.summary.scalar('pre_loss'+str(i), total_pre_loss[i])
-        tf.summary.scalar('meta_loss'+str(i), total_meta_losses[i])
+        summary_ops.append(tf.summary.scalar('pre_loss'+str(i), total_pre_loss[i]))
+        summary_ops.append(tf.summary.scalar('meta_loss'+str(i), total_meta_losses[i]))
 
     #  optimizer = tf.train.GradientDescentOptimizer(0.001)
     optimizer_normal = tf.train.AdamOptimizer(learning_rate=0.001)
@@ -277,16 +300,21 @@ def main():
 
     saver = tf.train.Saver()
 
-    #  config = tf.ConfigProto()
-    #  config.gpu_options.allow_growth = True
-    config = tf.ConfigProto(device_count={'GPU': 0})
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    #  config = tf.ConfigProto(device_count={'GPU': 0})
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
+
+        #  # Profiler
+        #  from tensorflow.python.client import timeline
+        #  options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        #  run_metadata = tf.RunMetadata()
 
         if restore_epoch > 0:
             mylogger.info(f"Continue from epoch {restore_epoch}")
             saver.restore(
-                sess, "models/" + modelname + "/step.ckpt-" + str(restore_epoch))
+                sess, "models/" + modelname + "/step-" + str(restore_epoch))
 
         writer = tf.summary.FileWriter('./logs/' + modelname, sess.graph)
 
@@ -301,47 +329,51 @@ def main():
         summary_epoch = 100
         save_epoch = 100
 
-        #  # Profiler
-        #  from tensorflow.python.client import timeline
-        #  options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-        #  run_metadata = tf.RunMetadata()
+        #  mylogger.info("Pre Train started!")
+        #  for epoch in range(0000):
 
-        mylogger.info("Train started!")
-        for epoch in range(restore_epoch + 1, pretrain_epoch + metatrain_epoch + 1):
+        #      operations = [normal_train_op]
 
-            if epoch <= pretrain_epoch:
-                operations = [normal_train_op]
-                training_type = "normaltrain"
-            else:
-                operations = [meta_train_op]
-                training_type = "metatrain"
+        #      if epoch % summary_epoch == 0:
+        #          operations.extend(
+        #              [total_pre_loss[0],
+        #                  total_meta_losses[-1]])
+
+        #      results = sess.run(operations)
+
+        #      if epoch % summary_epoch == 0:
+        #          _, preloss, metaloss = results
+        #          mylogger.info(f"{epoch} pre:{preloss:.10f} meta:{metaloss:.10f}")
+
+        mylogger.info("Meta Train started!")
+        for epoch in range(restore_epoch + 1, train_epoch + 1):
+
+            operations = [meta_train_op]
 
             if epoch % summary_epoch == 0:
                 operations.extend(
-                    [tf.summary.merge_all(),
+                    [tf.summary.merge(summary_ops),
                         total_pre_loss[0],
                         total_meta_losses[-1]])
 
             #  # Profiler
-            #  results = sess.run(operations,
-            #  options=options, run_metadata=run_metadata)
+            #  results = sess.run(operations, options=options, run_metadata=run_metadata)
             results = sess.run(operations)
 
             if epoch % save_epoch == 0:
-                saver.save(sess, "models/" + modelname + "/step.ckpt", epoch)
+                saver.save(sess, "models/" + modelname + "/step", epoch)
 
             if epoch % summary_epoch == 0:
                 _, summ, preloss, metaloss = results
                 writer.add_summary(summ, epoch)
                 mylogger.info(
-                    f"{epoch} {training_type} " +
-                    f"pre:{preloss:.10f} meta:{metaloss:.10f}")
+                    f"{epoch} pre:{preloss:.10f} meta:{metaloss:.10f}")
 
-                #  # Profiler
-                #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-                #  chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
-                #      f.write(chrome_trace)
+            #  # Profiler
+            #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            #  chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
+            #      f.write(chrome_trace)
 
         num_sample_for_preupdate = 100
 

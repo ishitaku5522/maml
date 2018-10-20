@@ -44,17 +44,19 @@ def dataset_shuffle_draft():
 
     dataset = tf.data.Dataset.from_tensor_slices((x, y))
     dataset = dataset.repeat()
-    dataset = dataset.shuffle(buffer_size=2)
-    dataset = dataset.batch(6)
+    #  dataset = dataset.shuffle(buffer_size=2)
+    dataset = dataset.batch(3)
     iterator = dataset.make_initializable_iterator()
     elements = iterator.get_next()
     X, Y = elements
 
     sess = tf.InteractiveSession()
     sess.run(iterator.initializer)
-    for i in range(10):
-        ans = sess.run([X,Y])
-        print(ans[0])
+    for i in range(1):
+        ans = sess.run([X,Y,X,Y])
+        print(ans)
+        ans = sess.run([X,Y,X,Y])
+        print(ans)
 
 
 def main():
