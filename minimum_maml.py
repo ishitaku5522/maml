@@ -126,7 +126,7 @@ def main():
     modelname += "_setsize"+str(one_set_size)
     modelname += "_task"+str(num_tasks)
     restore_epoch = 0
-    train_epoch = 20000
+    train_epoch = 50000
 
     x_pre, x_meta, y_pre, y_meta, amps, phases = generate_dataset(
         num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range)
@@ -336,13 +336,13 @@ def main():
             #  results = sess.run(operations, options=options, run_metadata=run_metadata)
             results = sess.run(operations)
 
+            if epoch % save_epoch == 0:
+                saver.save(sess, "models/" + modelname + "/step", epoch)
+
             if epoch % summary_epoch == 0:
                 _, summ, preloss, metaloss = results
                 writer.add_summary(summ, epoch)
                 mylogger.info(f"{epoch} pre:{preloss:.10f} meta:{metaloss:.10f}")
-
-            if epoch % save_epoch == 0:
-                saver.save(sess, "models/" + modelname + "/step", epoch)
 
             #  # Profiler
             #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
