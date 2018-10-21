@@ -39,18 +39,30 @@ class NeuralNet(object):
         self.b = {}
         self.hidden_units = hidden_units
 
-    def forward_func(self, x, weights, reuse=False, name="model"):
+    def forward_func(self, x, weights, name="model", reuse=True):
+        is_training = True
         with tf.name_scope(name):
             layer = x
 
             key = "0"
             layer = tf.nn.leaky_relu(
                 tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
+            layer = tf.contrib.layers.batch_norm(
+                layer,
+                reuse=reuse,
+                scope="weights/" + key,
+                is_training=is_training)
 
             for i in range(len(self.hidden_units) - 1):
-                key = str(i+1)
+                key = str(i + 1)
                 layer = tf.nn.leaky_relu(
-                    tf.matmul(layer, weights["W_" + key]) + weights["b_" + key])
+                    tf.matmul(layer, weights["W_" + key]) +
+                    weights["b_" + key])
+                layer = tf.contrib.layers.batch_norm(
+                    layer,
+                    reuse=reuse,
+                    scope="weights/" + key,
+                    is_training=is_training)
 
             key = "out"
             layer = tf.matmul(layer, weights["W_" + key]) + weights["b_" + key]
@@ -63,7 +75,8 @@ class NeuralNet(object):
         return ans
 
 
-def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range, y_range):
+def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate,
+                     x_range, y_range):
     x_pre = []
     y_pre = []
     x_meta = []
@@ -107,7 +120,7 @@ def generate_dataset(num_tasks, one_set_size, num_sample_for_preupdate, x_range,
 
 def main():
 
-    num_tasks = 10
+    num_tasks = 25
     task_batch_size = 10
     num_preupdates = 5
 
@@ -116,16 +129,16 @@ def main():
     # and for metaupdate size will be:
     # ((one_set_size - 1) / one_set_size) * num_sample_for_preupdate
     one_set_size = 5
-    num_sample_for_preupdate = 50
+    num_sample_for_preupdate = 30
     x_range = 5
     y_range = 5
 
-    modelname = "sin_rnd_ampphase"
-    modelname += "_upd"+str(num_preupdates)
-    modelname += "_presmpl"+str(num_sample_for_preupdate)
-    modelname += "_setsize"+str(one_set_size)
-    modelname += "_task"+str(num_tasks)
-    restore_epoch = 0
+    modelname = "sin_rnd_AP_bnreuse"
+    modelname += "_upd" + str(num_preupdates)
+    modelname += "_presmpl" + str(num_sample_for_preupdate)
+    modelname += "_setsize" + str(one_set_size)
+    modelname += "_task" + str(num_tasks)
+    restore_epoch = 0000
     pretrain_epoch = 0
     metatrain_epoch = 30000
 
@@ -162,14 +175,15 @@ def main():
     dataset = tf.data.Dataset.from_tensor_slices((x_pre_ph, y_pre_ph,
                                                   x_meta_ph, y_meta_ph))
     dataset = dataset.repeat()
-    dataset = dataset.shuffle(buffer_size=num_tasks)
+    if restore_epoch < (metatrain_epoch + pretrain_epoch):
+        dataset = dataset.shuffle(buffer_size=num_tasks)
     dataset = dataset.prefetch(buffer_size=task_batch_size)
     dataset = dataset.batch(task_batch_size)
     iterator = dataset.make_initializable_iterator()
     elements = iterator.get_next()
     X_pre, Y_pre, X_meta, Y_meta = elements
 
-    hidden_units = [40, 40, 40]
+    hidden_units = [100, 100, 100]
 
     model = NeuralNet(hidden_units)
 
@@ -179,40 +193,42 @@ def main():
                 tf.truncated_normal(shape, stddev=tf.sqrt(2 / shape[0])),
                 name=name)
         elif name.startswith('b_'):
-            variable = tf.Variable(tf.zeros(shape))
+            variable = tf.Variable(tf.zeros(shape), name=name)
         else:
             mylogger.info('No matching initialization method for:', name)
-            variable = tf.Variable(
-                tf.truncated_normal(shape, stddev=0.01))
+            variable = tf.Variable(tf.truncated_normal(shape, stddev=0.01))
         return variable
 
     with tf.variable_scope("weights"):
         weights = {}
 
         key = "0"
-        weights["W_" +
-                key] = get_variable("W_" + key, shape=[1, hidden_units[0]])
-        weights["b_" +
-                key] = get_variable("b_" + key, shape=[hidden_units[0]])
-
-        for i in range(len(hidden_units)-1):
-            key = str(i+1)
+        with tf.variable_scope(key):
             weights["W_" + key] = get_variable(
-                "W_" + key, shape=[hidden_units[i], hidden_units[i+1]])
-            weights["b_" +
-                    key] = get_variable("b_" + key, shape=[hidden_units[i+1]])
+                "W_" + key, shape=[1, hidden_units[0]])
+            weights["b_" + key] = get_variable(
+                "b_" + key, shape=[hidden_units[0]])
+
+        for i in range(len(hidden_units) - 1):
+            key = str(i + 1)
+            with tf.variable_scope(key):
+                weights["W_" + key] = get_variable(
+                    "W_" + key, shape=[hidden_units[i], hidden_units[i + 1]])
+                weights["b_" + key] = get_variable(
+                    "b_" + key, shape=[hidden_units[i + 1]])
 
         key = "out"
-        weights["W_" +
-                key] = get_variable("W_" + key, shape=[hidden_units[-1], 1])
-        weights["b_" + key] = get_variable("b_" + key, shape=[1])
+        with tf.variable_scope(key):
+            weights["W_" + key] = get_variable(
+                "W_" + key, shape=[hidden_units[-1], 1])
+            weights["b_" + key] = get_variable("b_" + key, shape=[1])
 
         for key in weights.keys():
             tf.summary.histogram(key, weights[key])
 
     preupdate_lr = 0.001
 
-    def metalearn_for_one_task(inp):
+    def metalearn_for_one_task(inp, reuse=True):
         X_pre_one, Y_pre_one, X_meta_one, Y_meta_one = inp
 
         pre_predictions = [None] * num_preupdates
@@ -226,13 +242,13 @@ def main():
             # Prediction with old weights using preupdate data
             pre_predictions[i] = \
                 model.forward_func(X_pre_one, temporary_weights,
-                                   name="pre" + str(i))
+                                   name="pre" + str(i), reuse=reuse)
             pre_losses[i] = \
                 model.loss_func(pre_predictions[i], Y_pre_one)
 
             # Calcurate temporary grads/weights
-            temporary_grads = tf.gradients(
-                pre_losses[i], list(temporary_weights.values()))
+            temporary_grads = tf.gradients(pre_losses[i],
+                                           list(temporary_weights.values()))
             temporary_grads = \
                 dict(zip(temporary_weights.keys(), temporary_grads))
 
@@ -243,10 +259,16 @@ def main():
 
             # Prediction with new weights using the others data
             meta_predictions[i] = model.forward_func(
-                X_meta_one, temporary_weights, name="meta" + str(i))
+                X_meta_one,
+                temporary_weights,
+                name="meta" + str(i),
+                reuse=reuse)
             meta_losses[i] = model.loss_func(meta_predictions[i], Y_meta_one)
 
         return [pre_predictions, pre_losses, meta_predictions, meta_losses]
+
+    # Just for initialize the graph with reuse=False
+    unused = model.forward_func(X_pre[0], weights, name="unused", reuse=False)
 
     # Do metalearn_for_one_task for each tasks
     all_pre_predictions, all_pre_losses, \
@@ -260,14 +282,16 @@ def main():
             parallel_iterations=task_batch_size)
 
     # Total losses for batch of tasks
-    total_pre_loss = [tf.reduce_mean(all_pre_losses[i])
-                      for i in range(num_preupdates)]
-    total_meta_losses = [tf.reduce_mean(
-        all_meta_losses[i]) for i in range(num_preupdates)]
+    total_pre_loss = [
+        tf.reduce_mean(all_pre_losses[i]) for i in range(num_preupdates)
+    ]
+    total_meta_losses = [
+        tf.reduce_mean(all_meta_losses[i]) for i in range(num_preupdates)
+    ]
 
     for i in range(num_preupdates):
-        tf.summary.scalar('pre_loss'+str(i), total_pre_loss[i])
-        tf.summary.scalar('meta_loss'+str(i), total_meta_losses[i])
+        tf.summary.scalar('pre_loss' + str(i), total_pre_loss[i])
+        tf.summary.scalar('meta_loss' + str(i), total_meta_losses[i])
 
     #  optimizer = tf.train.GradientDescentOptimizer(0.001)
     optimizer_normal = tf.train.AdamOptimizer(learning_rate=0.001)
@@ -286,7 +310,8 @@ def main():
         if restore_epoch > 0:
             mylogger.info(f"Continue from epoch {restore_epoch}")
             saver.restore(
-                sess, "models/" + modelname + "/step.ckpt-" + str(restore_epoch))
+                sess,
+                "models/" + modelname + "/step.ckpt-" + str(restore_epoch))
 
         writer = tf.summary.FileWriter('./logs/' + modelname, sess.graph)
 
@@ -298,8 +323,8 @@ def main():
         }
         sess.run(iterator.initializer, feed_dict=feed_dict)
 
-        summary_epoch = 100
-        save_epoch = 100
+        summary_epoch = 1000
+        save_epoch = 1000
 
         #  # Profiler
         #  from tensorflow.python.client import timeline
@@ -307,7 +332,8 @@ def main():
         #  run_metadata = tf.RunMetadata()
 
         mylogger.info("Train started!")
-        for epoch in range(restore_epoch + 1, pretrain_epoch + metatrain_epoch + 1):
+        for epoch in range(restore_epoch + 1,
+                           pretrain_epoch + metatrain_epoch + 1):
 
             if epoch <= pretrain_epoch:
                 operations = [normal_train_op]
@@ -317,15 +343,18 @@ def main():
                 training_type = "metatrain"
 
             if epoch % summary_epoch == 0:
-                operations.extend(
-                    [tf.summary.merge_all(),
-                        total_pre_loss[0],
-                        total_meta_losses[-1]])
+                operations.extend([
+                    tf.summary.merge_all(), total_pre_loss[0],
+                    total_meta_losses[-1]
+                ])
 
             #  # Profiler
             #  results = sess.run(operations,
             #  options=options, run_metadata=run_metadata)
-            results = sess.run(operations)
+
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                results = sess.run(operations)
 
             if epoch % save_epoch == 0:
                 saver.save(sess, "models/" + modelname + "/step.ckpt", epoch)
@@ -337,15 +366,15 @@ def main():
                     f"{epoch} [{training_type}] " +
                     f"preloss:{preloss:.10f} metaloss:{metaloss:.10f}")
 
-                #  # Profiler
-                #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-                #  chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
-                #      f.write(chrome_trace)
+            #  # Profiler
+            #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            #  chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            #  with open('prof/timeline_02_step_%d.json' % epoch, 'w') as f:
+            #      f.write(chrome_trace)
 
         num_sample_for_preupdate = 100
 
-        num_test_tasks = 1
+        num_test_tasks = 9
         x_pre, x_meta, y_pre, y_meta, amps, phases = \
             generate_dataset(num_test_tasks, one_set_size,
                              num_sample_for_preupdate, x_range, y_range)
@@ -362,7 +391,8 @@ def main():
             [all_meta_predictions[0], all_meta_predictions[-1]])
 
     for i in range(num_test_tasks):
-        plt.figure(i)
+        #  plt.figure()
+        plt.subplot(3, 3, i + 1)
         plt.plot(x_meta[i], pred_pre[i], label="pred_pre" + str(i))
         plt.plot(x_meta[i], pred[i], label="pred" + str(i))
         plt.plot(x_meta[i], y_meta[i], label="y" + str(i))
