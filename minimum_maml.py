@@ -334,8 +334,8 @@ def main():
                 _, summ, preloss, metaloss = results
                 writer.add_summary(summ, epoch)
                 mylogger.info(
-                    f"{epoch} {training_type} " +
-                    f"pre:{preloss:.10f} meta:{metaloss:.10f}")
+                    f"{epoch} [{training_type}] " +
+                    f"preloss:{preloss:.10f} metaloss:{metaloss:.10f}")
 
                 #  # Profiler
                 #  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
